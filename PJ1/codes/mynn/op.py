@@ -86,7 +86,6 @@ class conv2D(Layer):
         # 初始化权重 [out_channels, in_channels, kH, kW]
         self.W = initialize_method(scale=scale, size=(out_channels, in_channels, self.kernel_size[0], self.kernel_size[1]))
         self.b = np.zeros((out_channels, 1))
-        
         # 初始化梯度和参数
         self.grads = {'W': np.zeros_like(self.W), 'b': np.zeros_like(self.b)}
         self.params = {'W': self.W, 'b': self.b}
@@ -108,78 +107,89 @@ class conv2D(Layer):
 
         self.input = X
         batch_size, _, H, W = X.shape
+        
+        # 计算输出尺寸
         new_H = (H + 2*self.padding - self.kernel_size[0]) // self.stride + 1
         new_W = (W + 2*self.padding - self.kernel_size[1]) // self.stride + 1
         
-        # 使用im2col方法加速卷积运算
-        X_col = im2col(X, self.kernel_size, self.stride, self.padding)
-        W_col = self.W.reshape(self.out_channels, -1)
-        output = np.dot(W_col, X_col) + self.b
-        return output.reshape(self.out_channels, new_H, new_W, batch_size).transpose(3, 0, 1, 2)
+        # 添加padding
+        if self.padding > 0:
+            X_padded = np.pad(X, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
+        else:
+            X_padded = X
+            
+        output = np.zeros((batch_size, self.out_channels, new_H, new_W))
+        
+        # 简单实现卷积操作
+        for b in range(batch_size):
+            for oc in range(self.out_channels):
+                for h in range(new_H):
+                    for w in range(new_W):
+                        h_start = h * self.stride
+                        w_start = w * self.stride
+                        h_end = h_start + self.kernel_size[0]
+                        w_end = w_start + self.kernel_size[1]
+                        
+                        # 提取当前窗口
+                        window = X_padded[b, :, h_start:h_end, w_start:w_end]
+                        # 计算卷积
+                        output[b, oc, h, w] = np.sum(window * self.W[oc]) + self.b[oc]
+        
+        return output
 
     def backward(self, grads):
         """
         grads : [batch_size, out_channel, new_H, new_W]
         """
-        batch_size, in_channels, H, W = self.input.shape
-        out_channels, _, new_H, new_W = grads.shape
+        batch_size, _, H, W = self.input.shape
+        _, _, new_H, new_W = grads.shape
         
-        # 1. 计算bias梯度
-        self.grads['b'] = np.sum(grads, axis=(0, 2, 3), keepdims=True)
+        # 初始化梯度
+        grad_input = np.zeros_like(self.input)
+        self.grads['W'] = np.zeros_like(self.W)
+        self.grads['b'] = np.zeros_like(self.b)
         
-        # 2. 使用im2col计算权重梯度
-        X_col = im2col(self.input, self.kernel_size, self.stride, self.padding)
-        grads_reshaped = grads.transpose(1, 2, 3, 0).reshape(out_channels, -1)
-        self.grads['W'] = np.dot(grads_reshaped, X_col.T)
-        self.grads['W'] = self.grads['W'].reshape(self.W.shape)
+        # 添加padding
+        if self.padding > 0:
+            X_padded = np.pad(self.input, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
+            grad_input_padded = np.pad(grad_input, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
+        else:
+            X_padded = self.input
+            grad_input_padded = grad_input
         
-        # 3. 计算输入梯度
-        W_reshaped = self.W.reshape(out_channels, -1)
-        dX_col = np.dot(W_reshaped.T, grads_reshaped)
-        grad_input = col2im(dX_col, self.input.shape, self.kernel_size, 
-                           self.stride, self.padding)
+        # 计算梯度
+        for b in range(batch_size):
+            for oc in range(self.out_channels):
+                for h in range(new_H):
+                    for w in range(new_W):
+                        h_start = h * self.stride
+                        w_start = w * self.stride
+                        h_end = h_start + self.kernel_size[0]
+                        w_end = w_start + self.kernel_size[1]
+                        
+                        # 计算W的梯度
+                        window = X_padded[b, :, h_start:h_end, w_start:w_end]
+                        self.grads['W'][oc] += grads[b, oc, h, w] * window
+                        
+                        # 计算b的梯度
+                        self.grads['b'][oc] += grads[b, oc, h, w]
+                        
+                        # 计算输入梯度
+                        grad_input_padded[b, :, h_start:h_end, w_start:w_end] += grads[b, oc, h, w] * self.W[oc]
         
-        # 权重衰减
+        # 如果有padding，需要去掉padding部分
+        if self.padding > 0:
+            grad_input = grad_input_padded[:, :, self.padding:-self.padding, self.padding:-self.padding]
+        
+        # 如果有权重衰减
         if self.weight_decay:
             self.grads['W'] += self.weight_decay_lambda * self.W
-            
+        
         return grad_input
     
     def clear_grad(self):
         self.grads = {'W' : None, 'b' : None}
-
-def col2im(col, input_shape, kernel_size, stride=1, padding=0):
-    """将列矩阵转换回图像格式"""
-    batch_size, in_channels, H, W = input_shape
-    kH, kW = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
-    
-    out_H = (H + 2*padding - kH) // stride + 1
-    out_W = (W + 2*padding - kW) // stride + 1
-    
-    # 初始化输出
-    if padding > 0:
-        img = np.zeros((batch_size, in_channels, H+2*padding, W+2*padding))
-    else:
-        img = np.zeros(input_shape)
-    
-    # 重建图像
-    col_reshaped = col.reshape(in_channels*kH*kW, out_H*out_W*batch_size)
-    for b in range(batch_size):
-        for h in range(out_H):
-            for w in range(out_W):
-                h_start = h * stride
-                w_start = w * stride
-                h_end = h_start + kH
-                w_end = w_start + kW
-                
-                img[b, :, h_start:h_end, w_start:w_end] += \
-                    col_reshaped[:, b*out_H*out_W + h*out_W + w].reshape(in_channels, kH, kW)
-    
-    # 去除padding
-    if padding > 0:
-        return img[:, :, padding:-padding, padding:-padding]
-    return img
-
+        
 class ReLU(Layer):
     """
     An activation layer.
@@ -283,50 +293,3 @@ def softmax(X):
     partition = np.sum(x_exp, axis=1, keepdims=True)
     partition = np.clip(partition, 1e-10, np.inf)
     return x_exp / partition
-
-
-def im2col(X, kernel_size, stride=1, padding=0):
-    """
-    将输入图像转换为列矩阵以便高效卷积计算
-    参数:
-        X: 输入数据 [batch_size, in_channels, H, W]
-        kernel_size: 卷积核大小 (kH, kW)
-        stride: 步长
-        padding: 填充大小
-    返回:
-        col: 2D矩阵 [kH*kW*in_channels, out_H*out_W*batch_size]
-    """
-    if isinstance(kernel_size, int):
-        kernel_size = (kernel_size, kernel_size)
-        
-    batch_size, in_channels, H, W = X.shape
-    kH, kW = kernel_size
-    
-    # 计算输出尺寸
-    out_H = (H + 2*padding - kH) // stride + 1
-    out_W = (W + 2*padding - kW) // stride + 1
-    
-    # 添加padding
-    if padding > 0:
-        X_padded = np.pad(X, ((0,0), (0,0), (padding,padding), (padding,padding)), 
-                         mode='constant')
-    else:
-        X_padded = X
-    
-    # 初始化输出矩阵
-    col = np.zeros((kH*kW*in_channels, out_H*out_W*batch_size))
-    
-    # 填充输出矩阵
-    for b in range(batch_size):
-        for h in range(out_H):
-            for w in range(out_W):
-                h_start = h * stride
-                w_start = w * stride
-                h_end = h_start + kH
-                w_end = w_start + kW
-                
-                # 提取当前窗口并展平
-                window = X_padded[b, :, h_start:h_end, w_start:w_end]
-                col[:, b*out_H*out_W + h*out_W + w] = window.reshape(-1)
-    
-    return col
