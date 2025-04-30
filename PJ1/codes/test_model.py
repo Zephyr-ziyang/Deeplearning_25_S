@@ -9,7 +9,7 @@ import os
 # 获取当前文件所在目录
 base_dir = os.path.dirname(os.path.abspath(__file__))
 # 构建模型路径
-# model_path = os.path.join(base_dir, 'best_models', 'oringin.pickle')
+# model_path = os.path.join(base_dir, 'best_models', 'origin.pickle')
 # model_path = os.path.join(base_dir, 'best_models', 'MomentGD.pickle')
 model_path = os.path.join(base_dir, 'best_models', 'reg.pickle')
 
