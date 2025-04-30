@@ -30,3 +30,7 @@
                 if i < len(size_list)-2 and act_func == 'ReLU':
                     self.layers.append(ReLU())
    ```
+2. MomentGD优化器：已添加
+3. 支持正则化方法：已添加L2正则化，早停，Dropout。
+4. 交叉熵损失函数：已添加
+5. 支持卷积神经网络（CNN）：已添加，但速度过慢未试用

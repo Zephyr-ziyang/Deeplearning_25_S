@@ -9,7 +9,9 @@ import os
 # 获取当前文件所在目录
 base_dir = os.path.dirname(os.path.abspath(__file__))
 # 构建模型路径
-model_path = os.path.join(base_dir, 'best_models', 'best_model.pickle')
+# model_path = os.path.join(base_dir, 'best_models', 'oringin.pickle')
+# model_path = os.path.join(base_dir, 'best_models', 'MomentGD.pickle')
+model_path = os.path.join(base_dir, 'best_models', 'reg.pickle')
 
 # 检查模型文件是否存在
 if not os.path.exists(model_path):
@@ -17,6 +19,9 @@ if not os.path.exists(model_path):
 
 model = nn.models.Model_MLP()
 model.load_model(model_path)
+
+# 测试前设置模型为评估模式
+model.eval()
 
 test_images_path = os.path.join(base_dir, 'dataset', 'MNIST', 't10k-images-idx3-ubyte.gz')
 test_labels_path = os.path.join(base_dir, 'dataset', 'MNIST', 't10k-labels-idx1-ubyte.gz')
@@ -30,6 +35,7 @@ with gzip.open(test_labels_path, 'rb') as f:
         test_labs = np.frombuffer(f.read(), dtype=np.uint8)
 
 test_imgs = test_imgs / test_imgs.max()
+
 
 logits = model(test_imgs)
 print(nn.metric.accuracy(logits, test_labs))

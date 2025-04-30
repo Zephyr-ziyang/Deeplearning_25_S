@@ -43,21 +43,59 @@ train_labs = train_labs[10000:]
 train_imgs = train_imgs / train_imgs.max()
 valid_imgs = valid_imgs / valid_imgs.max()
 
-model_type = 'CNN'
+
+# model_type = 'MLP' 
+# if model_type == 'MLP':
+#     model = nn.models.Model_MLP(
+#         size_list=[train_imgs.shape[-1], 600, 10],  # 输入层784, 隐藏层600, 输出层10
+#         act_func='ReLU'                           # 仅保留激活函数配置
+#     )
+# elif model_type == 'CNN':
+#     train_imgs = train_imgs.reshape(-1, 1, 28, 28)
+#     valid_imgs = valid_imgs.reshape(-1, 1, 28, 28)
+#     model = nn.models.Model_CNN(input_shape=(1, 28, 28), num_classes=10)
+
+# # 简化优化器和训练配置
+# optimizer = nn.optimizer.MomentGD(init_lr=0.01, model=model)  # 移除weight_decay
+# loss_fn = nn.op.MultiCrossEntropyLoss(model=model, max_classes=train_labs.max()+1)
+
+# runner = nn.runner.RunnerM(
+#     model, 
+#     optimizer, 
+#     nn.metric.accuracy, 
+#     loss_fn,
+#     batch_size=128
+# )
+
+
+model_type = 'MLP' 
 if model_type == 'MLP':
-    model = nn.models.Model_MLP([train_imgs.shape[-1], 600, 10], 'ReLU', [1e-4, 1e-4])
-elif model_type == 'CNN':
-    # 注意CNN需要调整输入形状
+    model = nn.models.Model_MLP(
+        size_list=[train_imgs.shape[-1], 600, 10],  # 输入层784, 隐藏层600, 输出层10
+        act_func='ReLU',                           # 使用ReLU激活函数
+        lambda_list=[1e-4, 1e-4],                  # L2正则化强度
+        dropout_p=0.2,                             # Dropout概率20%
+        patience=3                                 # Early stopping耐心值
+    )
+elif model_type == 'CNN': # 时间消耗过长，没有做下去
     train_imgs = train_imgs.reshape(-1, 1, 28, 28)  # 转换为CNN需要的形状 [N, C, H, W]
     valid_imgs = valid_imgs.reshape(-1, 1, 28, 28)
     model = nn.models.Model_CNN(input_shape=(1, 28, 28), num_classes=10)
 
-
-optimizer = nn.optimizer.SGD(init_lr=0.01, model=model)
+early_stopping = nn.callbacks.EarlyStopping(patience=3, min_delta=0.001)
+optimizer = nn.optimizer.SGD(init_lr=0.01, model=model, weight_decay=0.001)
 scheduler = nn.lr_scheduler.StepLR(optimizer=optimizer, step_size=500, gamma=0.5)
 loss_fn = nn.op.MultiCrossEntropyLoss(model=model, max_classes=train_labs.max()+1)
 
-runner = nn.runner.RunnerM(model, optimizer, nn.metric.accuracy, loss_fn, scheduler=scheduler, batch_size=128)
+runner = nn.runner.RunnerM(
+    model, 
+    optimizer, 
+    nn.metric.accuracy, 
+    loss_fn, 
+    scheduler=scheduler, 
+    batch_size=128,
+    callbacks=[early_stopping]
+)
 
 # print("初始参数示例:")
 # for i, param in enumerate(linear_model.parameters()):
@@ -66,7 +104,9 @@ runner = nn.runner.RunnerM(model, optimizer, nn.metric.accuracy, loss_fn, schedu
 #         break
 
 
-runner.train([train_imgs, train_labs], [valid_imgs, valid_labs], num_epochs=5, log_iters=100, save_dir=os.path.join(base_dir, 'best_models'))
+runner.train([train_imgs, train_labs], [valid_imgs, valid_labs], num_epochs=10, log_iters=100, save_dir=os.path.join(base_dir, 'best_models'))
+# 保存模型
+runner.save_model(os.path.join(base_dir, 'best_models', 'reg.pickle'))
 
 # # 训练后打印参数
 # print("\n训练后参数示例:")

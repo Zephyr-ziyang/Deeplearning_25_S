@@ -5,13 +5,16 @@ class Model_MLP(Layer):
     """
     A model with linear layers. We provied you with this example about a structure of a model.
     """
-    def __init__(self, size_list=None, act_func=None, lambda_list=None):
+    def __init__(self, size_list=None, act_func=None, lambda_list=None, dropout_p=0.0, patience=5):
         self.size_list = size_list
         self.act_func = act_func
+        self.dropout_p = dropout_p
+        self.patience = patience
+        self.best_val_loss = float('inf')
+        self.counter = 0
 
         if size_list is not None and act_func is not None:
             self.layers = []
-            # 更多层数选择
             for i in range(len(size_list)-1):
                 # 添加线性层
                 layer = Linear(in_dim=size_list[i], out_dim=size_list[i+1])
@@ -20,32 +23,46 @@ class Model_MLP(Layer):
                     layer.weight_decay_lambda = lambda_list[i]
                 self.layers.append(layer)
                 
-                # 激活函数添加
+                # 在隐藏层后添加激活函数和Dropout
                 if i < len(size_list)-2 and act_func == 'ReLU':
                     self.layers.append(ReLU())
-
+                    if dropout_p > 0:
+                        self.layers.append(Dropout(p=dropout_p))
+    
     def __call__(self, X):
         return self.forward(X)
-
+    
     def forward(self, X):
-        assert self.size_list is not None and self.act_func is not None, 'Model has not initialized yet. Use model.load_model to load a model or create a new model with size_list and act_func offered.'
+        assert self.size_list is not None and self.act_func is not None, 'Model has not initialized yet.'
         outputs = X
         for layer in self.layers:
             outputs = layer(outputs)
         return outputs
-
+    
     def backward(self, loss_grad):
         grads = loss_grad
         for layer in reversed(self.layers):
             grads = layer.backward(grads)
         return grads
-
+    
+    def early_stopping(self, val_loss):
+        """Early stopping机制"""
+        if val_loss < self.best_val_loss:
+            self.best_val_loss = val_loss
+            self.counter = 0
+            return False
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+            return False
+    
     def load_model(self, param_list):
         with open(param_list, 'rb') as f:
             param_list = pickle.load(f)
         self.size_list = param_list[0]
         self.act_func = param_list[1]
-
+    
         for i in range(len(self.size_list) - 1):
             self.layers = []
             for i in range(len(self.size_list) - 1):
@@ -78,6 +95,16 @@ class Model_MLP(Layer):
         
         with open(save_path, 'wb') as f:
             pickle.dump(param_list, f)
+
+    def train(self):
+        for layer in self.layers:
+            if hasattr(layer, 'training'):
+                layer.training = True
+                
+    def eval(self):
+        for layer in self.layers:
+            if hasattr(layer, 'training'):
+                layer.training = False
         
 
 class Model_CNN(Layer):
@@ -203,3 +230,13 @@ class Model_CNN(Layer):
         
         with open(save_path, 'wb') as f:
             pickle.dump(param_list, f)
+    
+    def train(self):
+        for layer in self.layers:
+            if hasattr(layer, 'training'):
+                layer.training = True
+                
+    def eval(self):
+        for layer in self.layers:
+            if hasattr(layer, 'training'):
+                layer.training = False

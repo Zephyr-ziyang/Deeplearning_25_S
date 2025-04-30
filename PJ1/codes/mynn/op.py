@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from scipy.signal import convolve2d
 import numpy as np
 
 class Layer():
@@ -66,129 +67,235 @@ class Linear(Layer):
     def clear_grad(self):
         self.grads = {'W' : None, 'b' : None}
 
+
 class conv2D(Layer):
-    """
-    The 2D convolutional layer. Try to implement it on your own.
-    """
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, initialize_method=np.random.normal, weight_decay=False, weight_decay_lambda=1e-8):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, 
+                 initialize_method=np.random.normal, weight_decay=False, weight_decay_lambda=1e-8):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        
         self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
         self.stride = stride
         self.padding = padding
         
-        # 计算fan_in
+        # 初始化权重 [out_channels, in_channels, kH, kW]
         fan_in = in_channels * self.kernel_size[0] * self.kernel_size[1]
         scale = np.sqrt(2.0 / fan_in)
-        
-        # 初始化权重 [out_channels, in_channels, kH, kW]
-        self.W = initialize_method(scale=scale, size=(out_channels, in_channels, self.kernel_size[0], self.kernel_size[1]))
+        self.W = initialize_method(scale=scale, size=(out_channels, in_channels, *self.kernel_size))
         self.b = np.zeros((out_channels, 1))
-        # 初始化梯度和参数
+        
         self.grads = {'W': np.zeros_like(self.W), 'b': np.zeros_like(self.b)}
         self.params = {'W': self.W, 'b': self.b}
         self.input = None
-        
         self.weight_decay = weight_decay
         self.weight_decay_lambda = weight_decay_lambda
-
-
-    def __call__(self, X) -> np.ndarray:
+    
+    def __call__(self, X):
         return self.forward(X)
     
     def forward(self, X):
-        """
-        input X: [batch, channels, H, W]
-        W : [1, out, in, k, k]
-        no padding
-        """
-
-        self.input = X
+        from scipy.signal import convolve2d
+        
         batch_size, _, H, W = X.shape
+        kH, kW = self.kernel_size
         
         # 计算输出尺寸
-        new_H = (H + 2*self.padding - self.kernel_size[0]) // self.stride + 1
-        new_W = (W + 2*self.padding - self.kernel_size[1]) // self.stride + 1
+        new_H = (H + 2*self.padding - kH) // self.stride + 1
+        new_W = (W + 2*self.padding - kW) // self.stride + 1
         
-        # 添加padding
-        if self.padding > 0:
-            X_padded = np.pad(X, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
-        else:
-            X_padded = X
-            
         output = np.zeros((batch_size, self.out_channels, new_H, new_W))
         
-        # 简单实现卷积操作
         for b in range(batch_size):
             for oc in range(self.out_channels):
-                for h in range(new_H):
-                    for w in range(new_W):
-                        h_start = h * self.stride
-                        w_start = w * self.stride
-                        h_end = h_start + self.kernel_size[0]
-                        w_end = w_start + self.kernel_size[1]
-                        
-                        # 提取当前窗口
-                        window = X_padded[b, :, h_start:h_end, w_start:w_end]
-                        # 计算卷积
-                        output[b, oc, h, w] = np.sum(window * self.W[oc]) + self.b[oc]
+                channel_sum = np.zeros((new_H, new_W))
+                for ic in range(self.in_channels):
+                    input_channel = X[b, ic]
+                    kernel = self.W[oc, ic]
+                    
+                    # 执行卷积
+                    conv_result = convolve2d(
+                        input_channel, kernel,
+                        mode='same' if self.padding else 'valid',
+                        boundary='fill', fillvalue=0
+                    )
+                    
+                    # 根据stride下采样
+                    if self.stride > 1:
+                        conv_result = conv_result[::self.stride, ::self.stride]
+                        conv_result = conv_result[:new_H, :new_W]
+                    
+                    channel_sum += conv_result
+                
+                output[b, oc] = channel_sum + self.b[oc]
         
+        self.input = X
         return output
 
     def backward(self, grads):
-        """
-        grads : [batch_size, out_channel, new_H, new_W]
-        """
+        from scipy.signal import convolve2d
+        
         batch_size, _, H, W = self.input.shape
         _, _, new_H, new_W = grads.shape
         
-        # 初始化梯度
         grad_input = np.zeros_like(self.input)
         self.grads['W'] = np.zeros_like(self.W)
-        self.grads['b'] = np.zeros_like(self.b)
+        self.grads['b'] = np.sum(grads, axis=(0, 2, 3)).reshape(-1, 1)
         
-        # 添加padding
-        if self.padding > 0:
-            X_padded = np.pad(self.input, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
-            grad_input_padded = np.pad(grad_input, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
-        else:
-            X_padded = self.input
-            grad_input_padded = grad_input
-        
-        # 计算梯度
         for b in range(batch_size):
             for oc in range(self.out_channels):
-                for h in range(new_H):
-                    for w in range(new_W):
-                        h_start = h * self.stride
-                        w_start = w * self.stride
-                        h_end = h_start + self.kernel_size[0]
-                        w_end = w_start + self.kernel_size[1]
-                        
-                        # 计算W的梯度
-                        window = X_padded[b, :, h_start:h_end, w_start:w_end]
-                        self.grads['W'][oc] += grads[b, oc, h, w] * window
-                        
-                        # 计算b的梯度
-                        self.grads['b'][oc] += grads[b, oc, h, w]
-                        
-                        # 计算输入梯度
-                        grad_input_padded[b, :, h_start:h_end, w_start:w_end] += grads[b, oc, h, w] * self.W[oc]
+                for ic in range(self.in_channels):
+                    input_patch = self.input[b, ic]
+                    grad_patch = grads[b, oc]
+                    
+                    if self.stride > 1:
+                        grad_patch = np.repeat(np.repeat(grad_patch, self.stride, axis=0), 
+                                             self.stride, axis=1)
+                        grad_patch = grad_patch[:H, :W]
+                    
+                    # 计算权重梯度
+                    self.grads['W'][oc, ic] += convolve2d(
+                        input_patch, grad_patch,
+                        mode='valid'
+                    )
+                    
+                    # 计算输入梯度
+                    rotated_kernel = np.rot90(self.W[oc, ic], 2)
+                    grad_input[b, ic] += convolve2d(
+                        grad_patch, rotated_kernel,
+                        mode='full'
+                    )[:H, :W]
         
-        # 如果有padding，需要去掉padding部分
-        if self.padding > 0:
-            grad_input = grad_input_padded[:, :, self.padding:-self.padding, self.padding:-self.padding]
-        
-        # 如果有权重衰减
         if self.weight_decay:
             self.grads['W'] += self.weight_decay_lambda * self.W
-        
+            
         return grad_input
     
     def clear_grad(self):
-        self.grads = {'W' : None, 'b' : None}
+        self.grads = {'W': None, 'b': None}
+
+# class conv2D(Layer):
+#     """
+#     The 2D convolutional layer. Try to implement it on your own.
+#     """
+#     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, initialize_method=np.random.normal, weight_decay=False, weight_decay_lambda=1e-8):
+#         super().__init__()
+#         self.in_channels = in_channels
+#         self.out_channels = out_channels
+        
+#         self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+#         self.stride = stride
+#         self.padding = padding
+        
+#         # 计算fan_in
+#         fan_in = in_channels * self.kernel_size[0] * self.kernel_size[1]
+#         scale = np.sqrt(2.0 / fan_in)
+        
+#         # 初始化权重 [out_channels, in_channels, kH, kW]
+#         self.W = initialize_method(scale=scale, size=(out_channels, in_channels, self.kernel_size[0], self.kernel_size[1]))
+#         self.b = np.zeros((out_channels, 1))
+#         # 初始化梯度和参数
+#         self.grads = {'W': np.zeros_like(self.W), 'b': np.zeros_like(self.b)}
+#         self.params = {'W': self.W, 'b': self.b}
+#         self.input = None
+        
+#         self.weight_decay = weight_decay
+#         self.weight_decay_lambda = weight_decay_lambda
+
+
+#     def __call__(self, X) -> np.ndarray:
+#         return self.forward(X)
+    
+#     def forward(self, X):
+#         """
+#         input X: [batch, channels, H, W]
+#         W : [1, out, in, k, k]
+#         no padding
+#         """
+
+#         self.input = X
+#         batch_size, _, H, W = X.shape
+        
+#         # 计算输出尺寸
+#         new_H = (H + 2*self.padding - self.kernel_size[0]) // self.stride + 1
+#         new_W = (W + 2*self.padding - self.kernel_size[1]) // self.stride + 1
+        
+#         # 添加padding
+#         if self.padding > 0:
+#             X_padded = np.pad(X, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
+#         else:
+#             X_padded = X
+            
+#         output = np.zeros((batch_size, self.out_channels, new_H, new_W))
+        
+#         # 简单实现卷积操作
+#         for b in range(batch_size):
+#             for oc in range(self.out_channels):
+#                 for h in range(new_H):
+#                     for w in range(new_W):
+#                         h_start = h * self.stride
+#                         w_start = w * self.stride
+#                         h_end = h_start + self.kernel_size[0]
+#                         w_end = w_start + self.kernel_size[1]
+                        
+#                         # 提取当前窗口
+#                         window = X_padded[b, :, h_start:h_end, w_start:w_end]
+#                         # 计算卷积
+#                         output[b, oc, h, w] = np.sum(window * self.W[oc]) + self.b[oc]
+        
+#         return output
+
+#     def backward(self, grads):
+#         """
+#         grads : [batch_size, out_channel, new_H, new_W]
+#         """
+#         batch_size, _, H, W = self.input.shape
+#         _, _, new_H, new_W = grads.shape
+        
+#         # 初始化梯度
+#         grad_input = np.zeros_like(self.input)
+#         self.grads['W'] = np.zeros_like(self.W)
+#         self.grads['b'] = np.zeros_like(self.b)
+        
+#         # 添加padding
+#         if self.padding > 0:
+#             X_padded = np.pad(self.input, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
+#             grad_input_padded = np.pad(grad_input, ((0,0), (0,0), (self.padding, self.padding), (self.padding, self.padding)))
+#         else:
+#             X_padded = self.input
+#             grad_input_padded = grad_input
+        
+#         # 计算梯度
+#         for b in range(batch_size):
+#             for oc in range(self.out_channels):
+#                 for h in range(new_H):
+#                     for w in range(new_W):
+#                         h_start = h * self.stride
+#                         w_start = w * self.stride
+#                         h_end = h_start + self.kernel_size[0]
+#                         w_end = w_start + self.kernel_size[1]
+                        
+#                         # 计算W的梯度
+#                         window = X_padded[b, :, h_start:h_end, w_start:w_end]
+#                         self.grads['W'][oc] += grads[b, oc, h, w] * window
+                        
+#                         # 计算b的梯度
+#                         self.grads['b'][oc] += grads[b, oc, h, w]
+                        
+#                         # 计算输入梯度
+#                         grad_input_padded[b, :, h_start:h_end, w_start:w_end] += grads[b, oc, h, w] * self.W[oc]
+        
+#         # 如果有padding，需要去掉padding部分
+#         if self.padding > 0:
+#             grad_input = grad_input_padded[:, :, self.padding:-self.padding, self.padding:-self.padding]
+        
+#         # 如果有权重衰减
+#         if self.weight_decay:
+#             self.grads['W'] += self.weight_decay_lambda * self.W
+        
+#         return grad_input
+    
+#     def clear_grad(self):
+#         self.grads = {'W' : None, 'b' : None}
         
 class ReLU(Layer):
     """
@@ -245,35 +352,32 @@ class MultiCrossEntropyLoss(Layer):
         self.predicts = predicts
         self.labels = labels
         
-        if self.has_softmax:
-            probs = softmax(predicts)
-        else:
-            probs = predicts
-            
-        # 建议增加数值稳定性处理
+        # 数值稳定的softmax计算
+        max_values = np.max(predicts, axis=1, keepdims=True)
+        exp_values = np.exp(predicts - max_values)
+        probs = exp_values / np.sum(exp_values, axis=1, keepdims=True)
+        
+        # 防止log(0)的情况
         probs = np.clip(probs, 1e-10, 1.0)
+        
+        # 计算交叉熵损失
         log_probs = -np.log(probs[range(len(labels)), labels])
         loss = np.mean(log_probs)
         
         return loss
-    
+
     def backward(self):
         batch_size = self.predicts.shape[0]
         
-        if self.has_softmax:
-            # 计算softmax梯度
-            probs = softmax(self.predicts)
-            # 正确计算梯度：∂L/∂z = p - y
-            grad = probs.copy()
-            grad[range(batch_size), self.labels] -= 1
-            grad /= batch_size  # 平均梯度
-        else:
-            # 直接计算交叉熵梯度
-            grad = np.zeros_like(self.predicts)
-            grad[range(batch_size), self.labels] = -1.0 / (self.predicts[range(batch_size), self.labels] + 1e-8)
-            grad /= batch_size
+        # 计算softmax梯度
+        max_values = np.max(self.predicts, axis=1, keepdims=True)
+        exp_values = np.exp(self.predicts - max_values)
+        probs = exp_values / np.sum(exp_values, axis=1, keepdims=True)
         
-        # 确保调用模型的backward方法
+        grad = probs.copy()
+        grad[range(batch_size), self.labels] -= 1
+        grad /= batch_size  # 平均梯度
+        
         if self.model is not None:
             self.model.backward(grad)
 
@@ -293,3 +397,26 @@ def softmax(X):
     partition = np.sum(x_exp, axis=1, keepdims=True)
     partition = np.clip(partition, 1e-10, np.inf)
     return x_exp / partition
+
+
+class Dropout(Layer):
+    def __init__(self, p=0.5):
+        super().__init__()
+        self.p = p
+        self.mask = None
+        self.training = True  # 添加训练/测试模式标志
+        self.optimizable = False
+
+    def __call__(self, X):
+        return self.forward(X)
+
+    def forward(self, X):
+        if self.training:
+            self.mask = (np.random.rand(*X.shape) > self.p) / (1 - self.p)
+            return X * self.mask
+        return X
+
+    def backward(self, grad):
+        if self.training:
+            return grad * self.mask
+        return grad

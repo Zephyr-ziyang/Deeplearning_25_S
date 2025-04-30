@@ -7,13 +7,14 @@ class RunnerM():
     This is an exmaple to train, evaluate, save, load the model. However, some of the function calling may not be correct 
     due to the different implementation of those models.
     """
-    def __init__(self, model, optimizer, metric, loss_fn, batch_size=32, scheduler=None):
+    def __init__(self, model, optimizer, metric, loss_fn, batch_size=32, scheduler=None, callbacks=None):
         self.model = model
         self.optimizer = optimizer
         self.loss_fn = loss_fn
         self.metric = metric
         self.scheduler = scheduler
         self.batch_size = batch_size
+        self.callbacks = callbacks or []
 
         self.train_scores = []
         self.dev_scores = []
@@ -21,6 +22,8 @@ class RunnerM():
         self.dev_loss = []
 
     def train(self, train_set, dev_set, **kwargs):
+        # 训练前设置模型为训练模式
+        self.model.train()
 
         num_epochs = kwargs.get("num_epochs", 0)
         log_iters = kwargs.get("log_iters", 100)
@@ -72,14 +75,14 @@ class RunnerM():
                 self.dev_scores.append(dev_score)
                 self.dev_loss.append(dev_loss)
 
-                if (iteration) % log_iters == 0:
-                    print(f"epoch: {epoch}, iteration: {iteration}")
-                    print(f"[Train] loss: {trn_loss}, score: {trn_score:.7f}")  # 增加小数位数
-                    print(f"[Dev] loss: {dev_loss}, score: {dev_score:.7f}")
-                    print(f"参数更新检查: ")
-                    for i, layer in enumerate(self.model.layers[:2]):
-                        if layer.optimizable:
-                            print(f"Layer {i} W max: {layer.params['W'].max()}, min: {layer.params['W'].min()}")
+                # if (iteration) % log_iters == 0:
+                    # print(f"epoch: {epoch}, iteration: {iteration}")
+                    # print(f"[Train] loss: {trn_loss}, score: {trn_score:.7f}")  # 增加小数位数
+                    # print(f"[Dev] loss: {dev_loss}, score: {dev_score:.7f}")
+                    # print(f"参数更新检查: ")
+                    # for i, layer in enumerate(self.model.layers[:2]):
+                    #     if layer.optimizable:
+                    #         print(f"Layer {i} W max: {layer.params['W'].max()}, min: {layer.params['W'].min()}")
                 batch_pbar.set_postfix({
                     'train_loss': f'{trn_loss:.4f}',
                     'train_acc': f'{trn_score:.4f}',
@@ -97,7 +100,15 @@ class RunnerM():
                 best_score = dev_score
         self.best_score = best_score
 
+        # 在每个epoch结束时检查callbacks
+        for callback in self.callbacks:
+            if callback.early_stopping and callback(self.dev_loss[-1]):
+                print("Early stopping triggered")
+                return
+
     def evaluate(self, data_set):
+        # 评估前设置模型为评估模式
+        self.model.eval()
         X, y = data_set
         logits = self.model(X)
         loss = self.loss_fn(logits, y)
