@@ -31,17 +31,26 @@ class RunnerM():
 
         best_score = 0
 
-        for epoch in range(num_epochs):
+        epoch_pbar = tqdm(range(num_epochs), desc='Training', unit='epoch')
+        for epoch in epoch_pbar:
             X, y = train_set
 
             assert X.shape[0] == y.shape[0]
-
+            
             idx = np.random.permutation(range(X.shape[0]))
-
+            
             X = X[idx]
             y = y[idx]
 
-            for iteration in range(int(X.shape[0] / self.batch_size) + 1):
+            
+            batch_pbar = tqdm(range(int(X.shape[0] / self.batch_size) + 1), 
+                            desc=f'Epoch {epoch}', 
+                            leave=False,
+                            unit='batch')
+            
+            for iteration in batch_pbar:
+                # 在每次迭代前清零梯度
+                self.optimizer.zero_grad()
                 train_X = X[iteration * self.batch_size : (iteration+1) * self.batch_size]
                 train_y = y[iteration * self.batch_size : (iteration+1) * self.batch_size]
 
@@ -65,8 +74,21 @@ class RunnerM():
 
                 if (iteration) % log_iters == 0:
                     print(f"epoch: {epoch}, iteration: {iteration}")
-                    print(f"[Train] loss: {trn_loss}, score: {trn_score}")
-                    print(f"[Dev] loss: {dev_loss}, score: {dev_score}")
+                    print(f"[Train] loss: {trn_loss}, score: {trn_score:.7f}")  # 增加小数位数
+                    print(f"[Dev] loss: {dev_loss}, score: {dev_score:.7f}")
+                    print(f"参数更新检查: ")
+                    for i, layer in enumerate(self.model.layers[:2]):
+                        if layer.optimizable:
+                            print(f"Layer {i} W max: {layer.params['W'].max()}, min: {layer.params['W'].min()}")
+                batch_pbar.set_postfix({
+                    'train_loss': f'{trn_loss:.4f}',
+                    'train_acc': f'{trn_score:.4f}',
+                    'val_acc': f'{dev_score:.4f}'
+                })
+            epoch_pbar.set_postfix({
+                'best_val_acc': f'{best_score:.4f}',
+                'current_val_acc': f'{dev_score:.4f}'
+            })    
 
             if dev_score > best_score:
                 save_path = os.path.join(save_dir, 'best_model.pickle')

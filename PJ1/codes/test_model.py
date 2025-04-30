@@ -4,12 +4,22 @@ from struct import unpack
 import gzip
 import matplotlib.pyplot as plt
 import pickle
+import os
+
+# 获取当前文件所在目录
+base_dir = os.path.dirname(os.path.abspath(__file__))
+# 构建模型路径
+model_path = os.path.join(base_dir, 'best_models', 'best_model.pickle')
+
+# 检查模型文件是否存在
+if not os.path.exists(model_path):
+    raise FileNotFoundError(f"模型文件不存在于: {model_path}")
 
 model = nn.models.Model_MLP()
-model.load_model(r'.\saved_models\best_model_1.pickle')
+model.load_model(model_path)
 
-test_images_path = r'.\dataset\MNIST\t10k-images-idx3-ubyte.gz'
-test_labels_path = r'.\dataset\MNIST\t10k-labels-idx1-ubyte.gz'
+test_images_path = os.path.join(base_dir, 'dataset', 'MNIST', 't10k-images-idx3-ubyte.gz')
+test_labels_path = os.path.join(base_dir, 'dataset', 'MNIST', 't10k-labels-idx1-ubyte.gz')
 
 with gzip.open(test_images_path, 'rb') as f:
         magic, num, rows, cols = unpack('>4I', f.read(16))
